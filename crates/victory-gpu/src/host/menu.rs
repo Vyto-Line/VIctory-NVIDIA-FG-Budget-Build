@@ -1,10 +1,14 @@
 //! The F1 settings menu. F1 shows and hides it while our window has the
 //! focus; Up/Down pick a setting, Left/Right change it, Enter runs the line
-//! picked (save, save and restart, reset, close), Esc closes. While it is
+//! picked (save, save and restart, preload shaders, reset, close), Esc
+//! closes. Preloading saves, ends this run and has the launcher make every
+//! shader before the title starts again (`VICTORY_PRELOAD=1`, `victory
+//! preload`); it asks for a second Enter first. While it is
 //! shown the title sees no keyboard (`crate::SETTINGS_MENU_OPEN`, read by the
 //! input module); a pad still works.
 //!
-//! The settings are read once at start, so a change is saved to the file
+//! The settings are read once at start, so a change is saved at once (as well as by the save
+//! lines) to the file
 //! `VICTORY_MENU_FILE` names (`scripts\play-foxhound.ps1` sets it to
 //! `victory-settings.txt` in the repository's folder and applies it at every
 //! start) and takes effect at the next start; "SAVE AND RESTART" starts the
@@ -35,9 +39,28 @@ const GLYPH: (u32, u32) = (5, 7);
 const CELL: (u32, u32) = (6, 9);
 const COLUMNS: u32 = 60;
 /// Lines of the box: a title, a help line, a blank, the settings shown, a
-/// blank and a note.
+/// blank, what the line picked does (`ABOUT`, else blank), a note and the
+/// repository's link.
 const ROWS: usize = 20;
-const LINES: u32 = ROWS as u32 + 5;
+const LINES: u32 = ROWS as u32 + 9;
+/// The action that preloads shaders, and what is said of it while it is picked.
+const PRELOAD: usize = 2;
+const ABOUT_PRELOAD: [&str; 3] = [
+    "MAKES EVERY SHADER AHEAD, THEN STARTS THE GAME AGAIN.",
+    "TAKES A WHILE: MAYBE A LONG TIME, DEPENDING ON HARDWARE.",
+    "A LATER UPDATE OF THIS BUILD MAY NEED A NEW PRELOAD.",
+];
+/// The setting that turns MFG Unlocker on, and what is said of it while it is picked.
+const MFG: &str = "VICTORY_MFG_UNLOCKER";
+const ABOUT_MFG: [&str; 3] = [
+    "A MOD, NOT OURS: DLSS FRAME GEN ON RTX 20 AND 30 CARDS.",
+    "ON: DOWNLOADED FROM ITS GITHUB AT THE NEXT START, THEN RUN.",
+    "NVIDIA DOES NOT SUPPORT IT. IF THE GAME FAILS, TURN IT OFF.",
+];
+/// The note after the first Enter on it: the second one does it.
+const CONFIRM_PRELOAD: &str = "ENTER AGAIN: SAVE, CLOSE THE GAME AND PRELOAD";
+/// The last line of the box: where this build comes from.
+const REPO: &str = "GITHUB.COM/TRUSTNO1-CODER/VICTORY-NVIDIA";
 const RIM: u32 = 4;
 const UPLOADS: usize = 4;
 
@@ -60,6 +83,10 @@ const ITEMS: &[Item] = &[
     // The launcher's own choices.
     Item { var: "VICTORY_MENU_DLSS", label: "DLSS", values: &[("quality", "QUALITY"), ("balanced", "BALANCED"), ("performance", "PERFORMANCE"), ("dlaa", "DLAA (NATIVE)"), ("off", "OFF")], live: false },
     Item { var: "VICTORY_MENU_FRAMEGEN", label: "FRAME GENERATION", values: &[("0", "OFF"), ("2", "2X"), ("3", "3X"), ("4", "4X"), ("5", "5X"), ("6", "6X (MOST)")], live: false },
+    // DLSS Frame Generation where it runs (RTX 40 and later), else AMD's FSR 3 (2X only).
+    Item { var: "VICTORY_MENU_FG_TYPE", label: "FRAME GEN TYPE", values: &[("auto", "AUTO"), ("dlss", "DLSS"), ("fsr", "FSR 3 (OLDER CARDS)")], live: false },
+    // Someone else's mod (apps\victory\src\play.rs): downloaded at the next start, then loaded.
+    Item { var: MFG, label: "MFG UNLOCKER (MOD, RTX 20/30)", values: UNSET_ON, live: false },
     Item { var: "VICTORY_MENU_FPS", label: "FRAME RATE CAP", values: &[("1000", "NONE"), ("120", "120"), ("60", "60"), ("30", "30 (THE GAME)")], live: false },
     Item { var: "VICTORY_FPS_LINE", label: "FPS AT THE TOP", values: &[("1", "ON"), ("0", "OFF")], live: true },
     Item { var: "VICTORY_PANEL", label: "STATS PANEL (F3)", values: &[("0", "OFF"), ("1", "ON")], live: true },
@@ -74,7 +101,9 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_AMBIENT_SPECULAR", label: "REFLECTION ESTIMATE", values: ON_UNSET, live: false },
     Item { var: "VICTORY_AMBIENT_AIR", label: "FOG CAP", values: &[("1.5", "1.5"), ("1", "1"), ("2", "2"), ("", "NONE")], live: false },
     Item { var: "VICTORY_BVH_BUILDER", label: "RAY TRACING (SLOW, BROKEN)", values: UNSET_ON, live: false },
-    Item { var: "VICTORY_WATER_LIGHT", label: "WATER LIGHT", values: &[("", "OFF (NO DARK BLOCKS)"), ("1", "ON (GREEN, DARK BLOCKS)")], live: false },
+    // On unless "0": a file saved by an earlier version holds an empty value (its OFF) or "1",
+    // and both start it on, so nobody keeps it off from before by accident (2026-11-27).
+    Item { var: "VICTORY_WATER_LIGHT", label: "WATER LIGHT", values: &[("", "ON"), ("0", "OFF")], live: false },
     Item { var: "VICTORY_LEAVE_OUT", label: "HEAT HAZE AND DECAL DEFRAG", values: &[("02384a60fda6f2d0,731a39171b568298", "LEFT OUT"), ("", "RUN (SLOWER, SMEARS)")], live: false },
     Item { var: "VICTORY_EARLY_DEPTH", label: "EARLY DEPTH TEST", values: ON_UNSET, live: false },
     Item { var: "VICTORY_WC_NO_BACK", label: "SKIP BIG COPY-BACKS", values: ON_UNSET, live: false },
@@ -87,10 +116,88 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_PORT_CONSTANTS", label: "CONSTANTS HEAP IN PLACE", values: UNSET_ON, live: false },
 ];
 /// The lines after the settings.
-const ACTIONS: [&str; 4] = ["SAVE AND RESTART NOW", "SAVE FOR NEXT START", "RESET ALL TO PLAY DEFAULTS", "CLOSE"];
+const ACTIONS: [&str; 5] =
+    ["SAVE AND RESTART NOW", "SAVE FOR NEXT START", "PRELOAD SHADERS (RESTARTS THE GAME)", "RESET ALL TO PLAY DEFAULTS", "CLOSE"];
 
 fn get(var: &str) -> String {
     std::env::var(var).unwrap_or_default()
+}
+
+/// Where the menu saves: the file `VICTORY_MENU_FILE` names (`victory play` sets it); else,
+/// however the game was started (a script, another launcher), the one `victory play` reads at
+/// every start, `victory-settings.txt` in `VICTORY_HOME` or `%LOCALAPPDATA%\victory`.
+fn settings_file() -> Option<std::path::PathBuf> {
+    let set = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    set("VICTORY_MENU_FILE")
+        .or_else(|| set("VICTORY_HOME").map(|home| home.join("victory-settings.txt")))
+        .or_else(|| set("LOCALAPPDATA").map(|base| base.join("victory").join("victory-settings.txt")))
+}
+
+/// The first start of a new victory.exe: the seconds it plays before it starts
+/// again by itself (`VICTORY_WARMUP_RESTART`, set by the launcher while the exe
+/// has no mark under `%LOCALAPPDATA%\victory\warmed`). On the RTX 5070, every
+/// new build's first run stayed at a flat 14 fps (Present ~40 ms) for as long as
+/// it ran, and every later run was normal (27-29 fps), even after a first run of
+/// 45 seconds; a copy of an exe already run was fast at once (2026-11-27). Likely
+/// the driver's cache of the program; not ours to fix, so it is run through once.
+/// Draws in a frame from which the warm-up's time counts: the game's scenes
+/// (loading into the world: about 300, in the world: thousands), not its
+/// title screen and menus (about 10).
+const SCENE_DRAWS: u64 = 100;
+
+pub(crate) fn warmup_seconds() -> Option<u64> {
+    get("VICTORY_WARMUP_RESTART").parse().ok().filter(|s| *s > 0)
+}
+
+/// The start's notice lines for the warm-up start ([`warmup_seconds`]).
+pub(crate) fn warmup_notice(seconds: u64) -> Vec<String> {
+    vec![
+        "FIRST START OF THIS VERSION: A ONE-TIME WARM-UP".to_owned(),
+        format!("THE GAME RESTARTS BY ITSELF {seconds} SECONDS AFTER IT"),
+        "LOADS INTO THE GAME (PRESS A AT THE TITLE SCREEN)".to_owned(),
+        "THIS HAPPENS ONCE PER NEW VERSION, AND IS NEEDED:".to_owned(),
+        "WITHOUT IT THE FIRST RUN STAYS AT ABOUT 14 FPS".to_owned(),
+        String::new(),
+    ]
+}
+
+/// Starts `command_line` in a console window of its own, with that console's input and output.
+/// (`std::process::Command` always hands its child this process's standard handles: the restarted
+/// launcher then wrote into the old launcher's pipe and log, not its own window, and kept the old
+/// launcher waiting on that pipe.)
+fn new_console(command_line: &str) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{CREATE_NEW_CONSOLE, CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW};
+    let mut line: Vec<u16> = command_line.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: plain structs, zero is their empty value.
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    let mut process: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `line` is a writable, terminated UTF-16 string; no handles inherited; this
+    // process's environment and folder.
+    let made = unsafe {
+        CreateProcessW(
+            std::ptr::null(),
+            line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            CREATE_NEW_CONSOLE,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut process,
+        )
+    };
+    if made == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the two handles CreateProcessW gave, closed once.
+    unsafe {
+        CloseHandle(process.hThread);
+        CloseHandle(process.hProcess);
+    }
+    Ok(())
 }
 
 /// Whether a change of `item` shows at once. Frame generation does when this run started with
@@ -129,6 +236,17 @@ fn fps_line() -> Option<String> {
 /// itself, at the end).
 fn index_of(item: &Item, value: &str) -> Option<usize> {
     item.values.iter().position(|(v, _)| *v == value)
+}
+
+/// What the menu shows for `value`: its label, an unknown value as itself,
+/// and a value the launcher did not set (a start without play.ps1) as
+/// "NOT SET" rather than a blank.
+fn shown_value(item: &Item, value: &str) -> String {
+    match index_of(item, value) {
+        Some(i) => item.values[i].1.to_owned(),
+        None if value.is_empty() => "NOT SET".to_owned(),
+        None => value.to_ascii_uppercase(),
+    }
 }
 
 /// Keys pressed, gathered on a thread of their own every 10 ms: a frame
@@ -294,7 +412,7 @@ impl Menu {
             let cursor = if row == self.at { '>' } else { ' ' };
             let line = if let Some(item) = ITEMS.get(row) {
                 let value = &self.values[row];
-                let shown = index_of(item, value).map_or(value.to_ascii_uppercase(), |i| item.values[i].1.to_owned());
+                let shown = shown_value(item, value);
                 let mark = if *value != self.started[row] { if live(item) { " *LIVE" } else { " *" } } else if live(item) { " LIVE" } else { "" };
                 format!("{cursor} {:<27} < {shown} >{mark}", item.label)
             } else {
@@ -306,7 +424,16 @@ impl Menu {
             out.push(String::new());
         }
         out.push(String::new());
+        let about = if self.at == ITEMS.len() + PRELOAD {
+            ABOUT_PRELOAD
+        } else if ITEMS.get(self.at).is_some_and(|i| i.var == MFG) {
+            ABOUT_MFG
+        } else {
+            [""; 3]
+        };
+        out.extend(about.iter().map(|l| (*l).to_owned()));
         out.push(if self.note.is_empty() { "* = CHANGED: APPLIES AT THE NEXT START UNLESS LIVE".to_owned() } else { self.note.clone() });
+        out.push(REPO.to_owned());
         out
     }
 
@@ -347,10 +474,13 @@ impl Menu {
 
     /// Writes the changed values over those in the settings file.
     fn save(&mut self) -> bool {
-        let Some(path) = std::env::var_os("VICTORY_MENU_FILE") else {
-            self.note = "NO SETTINGS FILE: START WITH VICTORY PLAY".to_owned();
+        let Some(path) = settings_file() else {
+            self.note = "NO FOLDER FOR THE SETTINGS FILE".to_owned();
             return false;
         };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let mut kept: Vec<(String, String)> = std::fs::read_to_string(&path)
             .unwrap_or_default()
             .lines()
@@ -370,9 +500,16 @@ impl Menu {
         }
         match std::fs::write(&path, text) {
             Ok(()) => {
-                tracing::info!(path = %std::path::Path::new(&path).display(), "settings menu: saved");
+                tracing::info!(path = %path.display(), "settings menu: saved");
                 self.started = self.values.clone();
-                self.note = "SAVED. APPLIES AT THE NEXT START".to_owned();
+                self.note = if std::env::var_os("VICTORY_MENU_FILE").is_some() {
+                    "SAVED. APPLIES AT THE NEXT START"
+                } else {
+                    // Started some other way (a script, another launcher): the file `victory play`
+                    // reads at every start, which this start did not.
+                    "SAVED. APPLIES WHEN VICTORY.EXE STARTS THE GAME"
+                }
+                .to_owned();
                 true
             }
             Err(e) => {
@@ -384,23 +521,25 @@ impl Menu {
     }
 
     /// Starts the launcher again in a new console, a few seconds on, and ends this run.
-    fn restart(&mut self) {
-        use std::os::windows::process::CommandExt;
+    /// `preload`: the launcher makes every shader first (`VICTORY_PRELOAD=1`, for that start alone).
+    fn restart(&mut self, preload: bool) {
         let Some(play) = std::env::var_os("VICTORY_MENU_PLAY") else {
             self.note = "SAVED. START THE LAUNCHER AGAIN YOURSELF".to_owned();
             return;
         };
         let play = play.to_string_lossy().replace('\'', "''");
         let args = get("VICTORY_MENU_ARGS");
-        let command = format!("Start-Sleep 3; & '{play}' {args}");
-        const CREATE_NEW_CONSOLE: u32 = 0x10;
-        match std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &command])
-            .creation_flags(CREATE_NEW_CONSOLE)
-            .spawn()
-        {
-            Ok(_) => {
-                tracing::info!(command, "settings menu: restarting");
+        // The preload is asked by VICTORY_PRELOAD=1, which both launchers read (victory.exe's is
+        // `--preload`, the script's `-Preload`: the script's flag given to victory.exe was refused,
+        // and the window closed before it could be read, 2026-11-27). A launcher that fails keeps
+        // its window until Enter.
+        let command = format!(
+            "Start-Sleep 3; {}& '{play}' {args}; if ($LASTEXITCODE) {{ Read-Host 'The start failed (see above). Press Enter to close this window' }}",
+            if preload { "$env:VICTORY_PRELOAD='1'; " } else { "" }
+        );
+        match new_console(&format!("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"{}\"", command.replace('"', "\\\""))) {
+            Ok(()) => {
+                tracing::info!(command, preload, "settings menu: restarting");
                 // Ended at once: std::process::exit runs the DLLs' unloading, which with
                 // Streamline loaded did not come back (a windowless leftover process).
                 // SAFETY: this process, with nothing of its own left to save.
@@ -417,16 +556,61 @@ impl Menu {
         }
     }
 
+    /// The warm-up start ([`warmup_seconds`]): once the game has drawn whole
+    /// scenes for that long, this exe is marked as warmed up
+    /// (`VICTORY_WARMUP_MARK`) and the game starts again. The time counts
+    /// from the first frame of [`SCENE_DRAWS`] draws or more, not from the
+    /// start: a player who waited on the title screen ("press A", about ten
+    /// draws a frame) was restarted after 20 seconds and still had the 14 fps
+    /// first run after it (2026-11-27).
+    fn warmup(&mut self) {
+        static BEGAN: OnceLock<std::time::Instant> = OnceLock::new();
+        static DONE: AtomicBool = AtomicBool::new(false);
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let Some(seconds) = warmup_seconds() else { return };
+        if DONE.load(Ordering::Relaxed) {
+            return;
+        }
+        let ever = crate::list::draws_ever();
+        let this_frame = ever.saturating_sub(LAST.swap(ever, Ordering::Relaxed));
+        if BEGAN.get().is_none() && this_frame < SCENE_DRAWS {
+            return;
+        }
+        if BEGAN.get_or_init(std::time::Instant::now).elapsed() < Duration::from_secs(seconds) {
+            return;
+        }
+        DONE.store(true, Ordering::Relaxed);
+        let mark = std::path::PathBuf::from(get("VICTORY_WARMUP_MARK"));
+        if !mark.as_os_str().is_empty() {
+            if let Some(dir) = mark.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&mark, "this victory.exe was warmed up (its first start, then a restart)\r\n");
+        }
+        tracing::info!(seconds, mark = %mark.display(), "first start of this victory.exe: warmed up; the game starts again");
+        self.restart(false);
+    }
+
     /// Removes the settings file: the launcher's own settings at the next start.
     fn reset(&mut self) {
-        if let Some(path) = std::env::var_os("VICTORY_MENU_FILE") {
+        if let Some(path) = settings_file() {
             let _ = std::fs::remove_file(path);
         }
         self.note = "RESET. PLAY DEFAULTS AT THE NEXT START".to_owned();
     }
 
+    /// Changes a setting and saves it at once: many players changed settings and closed the
+    /// menu without the save lines, and lost them. The save lines stay (and restart, preload).
+    fn change_and_save(&mut self, i: usize, step: isize) {
+        self.change(i, step);
+        if self.save() && live(&ITEMS[i]) {
+            self.note = "SAVED. ON NOW".to_owned();
+        }
+    }
+
     /// A frame was presented: the keys pressed since the last one.
     pub(super) fn frame(&mut self) {
+        self.warmup();
         let pressed = std::mem::take(&mut *keys().lock().unwrap_or_else(|e| e.into_inner()));
         if pressed.is_empty() {
             return;
@@ -443,22 +627,33 @@ impl Menu {
             if !open {
                 continue;
             }
+            // Only an Enter right after the first one starts a preload.
+            let confirmed = self.note == CONFIRM_PRELOAD;
+            if confirmed {
+                self.note.clear();
+            }
             match vk {
                 VK_UP => self.at = (self.at + total - 1) % total,
                 VK_DOWN => self.at = (self.at + 1) % total,
-                VK_LEFT if self.at < ITEMS.len() => self.change(self.at, -1),
-                VK_RIGHT if self.at < ITEMS.len() => self.change(self.at, 1),
-                VK_RETURN if self.at < ITEMS.len() => self.change(self.at, 1),
+                VK_LEFT if self.at < ITEMS.len() => self.change_and_save(self.at, -1),
+                VK_RIGHT if self.at < ITEMS.len() => self.change_and_save(self.at, 1),
+                VK_RETURN if self.at < ITEMS.len() => self.change_and_save(self.at, 1),
                 VK_RETURN => match self.at - ITEMS.len() {
                     0 => {
                         if self.save() {
-                            self.restart();
+                            self.restart(false);
                         }
                     }
                     1 => {
                         self.save();
                     }
-                    2 => self.reset(),
+                    PRELOAD if !confirmed => self.note = CONFIRM_PRELOAD.to_owned(),
+                    PRELOAD => {
+                        if self.save() {
+                            self.restart(true);
+                        }
+                    }
+                    3 => self.reset(),
                     _ => crate::SETTINGS_MENU_OPEN.store(false, Ordering::Relaxed),
                 },
                 _ => {}
@@ -541,6 +736,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_change_is_saved_at_once_however_the_game_was_started() {
+        let home = std::env::temp_dir().join(format!("victory-menu-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        // SAFETY: no other test in this crate reads these two.
+        unsafe {
+            std::env::remove_var("VICTORY_MENU_FILE");
+            std::env::set_var("VICTORY_HOME", &home);
+        }
+        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: String::new(), changed: false, painted: None, buffers: None, failed: false };
+        menu.started = menu.values.clone();
+        let dlss = ITEMS.iter().position(|i| i.var == "VICTORY_MENU_DLSS").expect("in the menu");
+        menu.change_and_save(dlss, 1);
+        let text = std::fs::read_to_string(home.join("victory-settings.txt")).expect("saved without a save line");
+        assert!(text.contains("VICTORY_MENU_DLSS=quality"), "{text}");
+        assert_eq!(menu.note, "SAVED. APPLIES WHEN VICTORY.EXE STARTS THE GAME");
+        // Every note fits the box and has its letters.
+        for note in [menu.note.as_str(), "SAVED. ON NOW", "SAVED. APPLIES AT THE NEXT START", "NO FOLDER FOR THE SETTINGS FILE"] {
+            assert!(note.len() <= COLUMNS as usize, "{note}");
+            assert!(note.bytes().all(|c| glyph(c) != glyph(b'#')), "{note}");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
     fn every_line_fits_and_every_character_has_a_picture() {
         let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: String::new(), changed: false, painted: None, buffers: None, failed: false };
         menu.started = menu.values.clone();
@@ -553,6 +772,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_link_is_always_right_under_the_note() {
+        let mut menu = Menu { values: ITEMS.iter().map(|_| String::new()).collect(), started: Vec::new(), at: 0, note: String::new(), changed: false, painted: None, buffers: None, failed: false };
+        menu.started = menu.values.clone();
+        for note in ["", "SAVED"] {
+            menu.note = note.to_owned();
+            for at in 0..ITEMS.len() + ACTIONS.len() {
+                menu.at = at;
+                let lines = menu.lines();
+                assert_eq!(lines.len(), LINES as usize);
+                let n = lines.len();
+                assert!(lines[n - 2].starts_with("* = CHANGED") || lines[n - 2] == note, "{}", lines[n - 2]);
+                assert_eq!(lines[n - 1], REPO);
+                // What a preload costs, and what MFG Unlocker is, is said while it is picked, and only then.
+                let about = &lines[n - 5..n - 2];
+                if at == ITEMS.len() + PRELOAD {
+                    assert_eq!(about, ABOUT_PRELOAD);
+                } else if at < ITEMS.len() && ITEMS[at].var == MFG {
+                    assert_eq!(about, ABOUT_MFG);
+                } else {
+                    assert!(about.iter().all(String::is_empty), "{about:?}");
+                }
+            }
+        }
+        assert_eq!(ACTIONS[PRELOAD], "PRELOAD SHADERS (RESTARTS THE GAME)");
+        assert!(CONFIRM_PRELOAD.len() <= COLUMNS as usize);
+        assert!(ABOUT_MFG.iter().all(|l| l.len() <= COLUMNS as usize));
+        assert_eq!(ITEMS.iter().filter(|i| i.var == MFG).count(), 1);
     }
 
     #[test]
