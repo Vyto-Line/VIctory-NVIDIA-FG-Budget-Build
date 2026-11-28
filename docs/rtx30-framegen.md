@@ -13,12 +13,17 @@ DLSS Performance. The game rendered about 18 fps and the screen showed about 36 
 1. **Build:** `cargo build --release --locked -p victory`.
 2. **Get NVIDIA's DLSS files:** run `Get-NVIDIA-DLSS.cmd`. Without them there is no DLSS and no frame
    generation; every log says "No NVIDIA files".
-3. **Install the unlocker:** download MFG Unlocker from its author, then run
-   `Install-MFG-Unlocker.cmd "C:\path\to\MFGUnlocker.dll"`. This copies it beside `victory.exe` as
-   `dxgi.dll`.
-   - Don't rename it by hand in Explorer. Hidden extensions make that `dxgi.dll.dll`, which Windows never
-     loads.
-   - Install only one copy.
+3. **Install the unlocker.** VIctory now has it built in:
+   - **With `victory play`** (or a double-click on `victory.exe`): in the F1 menu, set **MFG UNLOCKER** to
+     ON, then restart. The next start downloads MFG Unlocker v1.7.2 from its author's GitHub release, checks
+     its SHA-256, and loads it. `victory.exe get-mfg` downloads it by hand.
+   - **With `scripts\play-foxhound.ps1` or the prewarm wizard's launcher:** these use `victory run`, which
+     doesn't load the built-in copy. Put a copy beside `victory.exe` as `winmm.dll` instead: in
+     `VIctory-Prewarm.exe`, click **Set up MFG Unlocker** on the settings page.
+     `Install-MFG-Unlocker.cmd "C:\path\to\MFGUnlocker.dll"` (as `dxgi.dll`) still works too.
+   - Install only one copy beside `victory.exe`: `winmm.dll` or `dxgi.dll`, not both.
+   - Without the unlocker, AMD FSR 3 frame generation (2x) works on any card: run `Get-AMD-FSR.cmd`
+     once, and frame generation type *auto* (the default) uses it where DLSS Frame Generation doesn't run.
 4. **Turn it on:** in the F1 menu, set DLSS (Performance suits a 3080) and frame generation 2x.
    - The menu saves its choices to `victory-settings.txt`, and those override the launcher's options.
    - If the menu has a 30 fps cap set, remove it.
@@ -60,4 +65,5 @@ values from that memory.
   input still reacts at 18 fps, and generated frames can smear in fast motion.
 - **Video memory:** with frame generation on, the launcher keeps 14-20% of video memory free for it
   (`VICTORY_TEXTURE_ROOM_PERCENT`). On a 10 GB card this can cost texture detail.
-- **Removing it:** run `Install-MFG-Unlocker.cmd remove`. A rebuild doesn't delete `dxgi.dll`.
+- **Removing it:** turn MFG UNLOCKER off in F1, and delete `winmm.dll` (or run `Install-MFG-Unlocker.cmd
+  remove` for `dxgi.dll`) beside `victory.exe`. A rebuild doesn't delete either.

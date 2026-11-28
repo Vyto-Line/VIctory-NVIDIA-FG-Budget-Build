@@ -22,8 +22,8 @@ if not exist "%VICTORY%" (
 )
 set "LOG=%LOCALAPPDATA%\victory\logs\prewarm.log"
 if not exist "%LOCALAPPDATA%\victory\logs" mkdir "%LOCALAPPDATA%\victory\logs"
-rem A frame generation unlocker installed as dxgi.dll is kept out of the many warm processes.
-if exist "%REL%\dxgi.dll" ren "%REL%\dxgi.dll" dxgi.dll.off
+rem A frame generation unlocker beside victory.exe (dxgi.dll or winmm.dll) is kept out of the many warm processes.
+for %%D in (dxgi winmm) do if exist "%REL%\%%D.dll" ren "%REL%\%%D.dll" %%D.dll.off
 echo Step 1 of 2: shaders (a few minutes). Log: %LOG%
 echo === shaders %date% %time% > "%LOG%"
 "%VICTORY%" shaders "%VICTORY_GAME_DIR%" >> "%LOG%" 2>&1
@@ -32,7 +32,7 @@ echo === warm %date% %time% >> "%LOG%"
 "%VICTORY%" warm >> "%LOG%" 2>&1
 set "CODE=%errorlevel%"
 echo === done %date% %time% exit %CODE% >> "%LOG%"
-if exist "%REL%\dxgi.dll.off" ren "%REL%\dxgi.dll.off" dxgi.dll
+for %%D in (dxgi winmm) do if exist "%REL%\%%D.dll.off" ren "%REL%\%%D.dll.off" %%D.dll
 echo Done (exit %CODE%).
 pause
 exit /b %CODE%
